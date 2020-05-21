@@ -44,7 +44,7 @@ public class Participant {
 
     public boolean join() throws IOException {
         System.out.println("JOIN Attempt");
-        boolean joined = false;
+        //boolean joined = false;
         pr.println("JOIN " + pport);
         pr.flush();
 
@@ -65,17 +65,18 @@ public class Participant {
 
 
     public static void main(String[] args) throws IOException{
-//        String[] defA = new String[6];
-//        defA[0] = "4998";
-//        defA[1] = "4997";
-//        defA[2] = "4999";
-//        defA[3] = "500";
+        String[] defA = new String[6];
+        defA[0] = "4998";
+        defA[1] = "4997";
+        defA[2] = "4999";
+        defA[3] = "500";
 
         Participant participant = new Participant(args);
-        if(participant.join()){
-            System.out.println("P"+participant.pport+": Successfully joined");
+        boolean joined = participant.join();
+        if (joined){
+            System.out.println("Success");
         }else{
-            participant.s.close();
+            System.out.println("Fail");
         }
 
 
