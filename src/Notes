@@ -1,0 +1,153 @@
+COMP2207 Coursework - A Series of Indicative Votes
+
+INTRODUCTION
+
+Purpose:
+    - Implement a consensus protocol that tolerates participant failures.
+    - Protocol involves two types of processes:
+        - a coordinator - initiate a run of the consensus algorithm and collect the outcome of the vote
+        - a participant - contributes a vote and communicates with the other participants to agree on an outcome
+
+Application should consist of 1 coordinator process and N participant processes. Any number of those participants may fail during the run of the consensus algorithm.
+The consensus algorithm is run among the participant processes, with the coordinator only collecting outcomes from the participants.
+
+Application needs a *logger server* where the other processes send log messages over the UDP protocol
+
+
+
+
+PROTOCOL FOR PARTICIPANT
+
+1. Register with coordinator. Establish a TCP connection with the coordinator and send the following byte stream:
+JOIN <port>
+<port> is the port number that this participant is listening on. This is also treated as identifier of the participant.
+
+* A participant on 12346 will send the message: JOIN 12346
+
+2. Get details of other participants from coordinator. Participant waits to receive a message from the coordinator with the details of all other participants.
+(i.e. read from the same socket connection):
+DETAILS [<port>]
+
+Where [<port>] is a list of the port numbers (aka. identifiers) of all other participants.
+Keep in mind that participant does not send its vote to itself. For example, a participant with identifier/port 12346 may receive information about two other participants.
+
+DETAILS 12347 12348
+
+
+3. Get vote options from coordinator. The participant should wait again to recive a message from coordinator with the details of voting options:
+VOTE_OPTIONS [<option>]
+Where [<option>] is the list of voting options for the consensus protocol. For example, there may be two options, A and B.
+
+VOTE_OPTIONS A B
+Then decide on own vote, from the options received.
+
+4. Execute a number of rounds by exchanging messages directly with the other participants using the TCP protocol
+
+Round 1 - participant sends and receives messages of the following structure
+
+        VOTE <port> <vote>
+
+        E.g. we have 3 participants listening on ports 12346, 12347, 12348 and their votes are A, B and A with no failures
+        These are messages passed between them:
+            - 12346 to 12347: VOTE 12346 A
+            - 12346 to 12348: VOTE 12346 A
+
+            - 12347 to 12346: VOTE 12347 B
+            - 12347 to 12348: VOTE 12347 B
+
+            - 12348 to 12346: VOTE 12348 A
+            - 12348 to 12357: VOTE 12348 A
+
+Round j > 1 - the participant will send and receive messages of the following structure in all subsequent rounds:
+
+    VOTE <port1> <vote 1> <port 2> <vote 2> ... <port n> <vote n>
+    Where <port i> and <vote i> are the port (identifier) and vote of any new votes received in the previous round
+
+
+5. Decide vote outcome using majority. In case of a tie, pick the first option according to an ascendant lexicographic order of the options with the majority of votes.
+For example, if there are three options A, B and C with 2, 2 and 1 votes. Then the winne would be A.
+
+6. Inform coordinator of the outcome. The following message should be sent to the coordinator on the same connection established during the initial stage:
+OUTCOME <outcome> [<port>]
+Where <outcome> is the option that this participant has decided is the outcome of the vote and [<port>] is the list of participants taken into account.
+For example, participant 12346 in the above example should send this message to the coordinator:
+
+OUTCOME A 12346 12347 12348
+
+So, agent 12346 has taken into account its own vote and those of 12347 and 12348 and come to the conclusion that A is the outcome by majority.
+
+
+
+
+PROTOCOL FOR THE COORDINATOR
+
+1. Wait for the number of participants specified to join. Number of participants should be given as a parameter to the main method of the coordinator (see below)
+JOIN <port>
+port being the port number of participant
+
+2. Send participant details to each participant once all participants have joined:
+DETAILS [<port>] where [<port>] is a list of the port numbers of all other participants.
+
+3. Send requests for votes to all participants:
+VOTE_OPTIONS [<option>]
+Where [<option>] is the list of voting options for the consensus protocol. The voting options should be given as a parameter to the main method of the coordinator (see below).
+
+4. Receive votes from participants:
+OUTCOME <outcome> [<port>]
+
+Where outcome is the option that this participant has decided is the outcome of the vote, and [<port>] is the list of participants that were taken into account in setting the vote.
+
+
+
+
+LOGGING
+
+Participant and Coordinator processes should log their operations in two different ways.
+They should use:
+(i) use two ad-hoc classes provided provided by us to log to a file
+(ii) implement a logger process that received messages via UDP and stores them in a file
+
+The following two subsections describe these two logging approaches in more detail:
+
+    LOGGER CLASSES
+
+    You should use the public methods provided by the classes "ParticipantLogger" and "CoordinatorLogger" to
+    log the main actions that coordinator and participant processes take.
+    For example, right after the coordinator accepted a connection from a participant, the method connectionAccepted() of CoordinatorLogger
+    should be invoked. Another example, as soon as a participant detects a failure of another participant (i.e. the corresponding connection has been interrupted),
+    the method participantCrashed() of ParticipantLogger should be invoked.
+
+    LOGGER SERVER
+
+    You should implement a UDPLoggerServer class that starts a server process which listens for UDP log messages on a specific port,
+    given as input parameter when the server process is started. Whenever a new message is received by the server, an acknowledgement is sent back to the sender process and the message is stored in a log file by the server.
+    The acknowledge message is the string "ACK" without quotes. As this is using UDP the client should timeout if it did not receive an ACK
+    and resend up to three times. The log messages sent by the coordinator and participant processes have the following format:
+
+    id msg
+
+    where id is the TCP port where the sender process is listening on and msg is the log message
+    For each log message id msg sent by a process id at time t, the log file should include an entry formatted in this way:
+    id t msg
+
+    The method System.currentTimeMillis() should be used to obtain the current time.
+    E.g. if log message "12346 [P12346] JOIN sent to Coordinator on port 12345" is sent by the participant listening on
+    port 12456 and is received by the Logger server at time 154241234, then the log file should include the following entry:
+
+    12346 154241234 [P12346] JOIN sent to Coordinator on port 12345
+
+
+    The name of the log file must be logger_server_(t).log, where (t) is to be replaced with the time the Logger Server was started.
+    For example, if the Logger serv was launched at time 111111111, then the name of the log file should be logger_server_111111111.log
+
+    Implement UDPLoggerClient class that coordinator and participants will use to send log messages to the logger server using UDP protocol. IN the specific,
+    this class will provide a singe method logToServer(String message) that will be invoked internally by all the public methods of ParticipantLogger and CoordinatorLogger classes
+    This means that you do not need to invoge logToServer exlicitly in your code. The implementation should retransmit the message to the Logger Server if an acknowledge is not received with a specific timeout, given as inout parameted to coordinator
+    and participant processes when they are launched. If no ACK is received after three retransmissions, the the logToServer() method should thro IOException.
+
+
+
+    HOW TO USE LOGGER CLASSES
+
+    -- info here-
+
