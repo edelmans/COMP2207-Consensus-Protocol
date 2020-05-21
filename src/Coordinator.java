@@ -48,7 +48,7 @@ public class Coordinator{
     public void handleConnection()throws IOException{
         while(participants.size() < parts){
 //                System.out.println("Current amount of participants joined: " + participants.size() + " out of " + parts);
-                s = ss.accept();
+            s = ss.accept();
             System.out.println("New client connection attempt from port " + s.getPort());
 
             CoordinatorThread thread = new CoordinatorThread(s);

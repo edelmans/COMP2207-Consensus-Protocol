@@ -109,7 +109,7 @@ public class Participant {
 
     public void connectToOthers() throws IOException {
         for(int i : otherParticipants) {
-            ParticipantThread thread = new ParticipantThread(i);
+            ParticipantClientThread thread = new ParticipantClientThread(i);
             synchronized (participantConnections){
                 participantConnections.put(thread, i);
             }
@@ -135,23 +135,26 @@ public class Participant {
 //
 //    }
 
-    public class ParticipantThread extends Thread{
+    public class ParticipantClientThread extends Thread{
         Socket pSocket;
         PrintWriter out;
         InputStreamReader in;
         BufferedReader inBr;
         int otherPort;
 
-        public ParticipantThread(int p1) throws IOException {
+        public ParticipantClientThread(int p1) throws IOException {
             otherPort = p1;
             pSocket = new Socket("localhost", otherPort);
             out = new PrintWriter(pSocket.getOutputStream());
             in = new InputStreamReader(pSocket.getInputStream());
             inBr = new BufferedReader(in);
+
+
         }
 
         public void run(){
-
+            System.out.println("Running a new thread where a connection to " + otherPort + " is made.");
+            out.println("Test from " + pport);
         }
 
 
