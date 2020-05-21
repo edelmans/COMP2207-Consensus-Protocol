@@ -4,10 +4,7 @@ import java.io.InputStreamReader;
 import java.io.PrintWriter;
 import java.net.ServerSocket;
 import java.net.Socket;
-import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.HashSet;
-import java.util.Set;
+import java.util.*;
 
 public class Coordinator{
     private ServerSocket ss;
@@ -50,8 +47,8 @@ public class Coordinator{
 
     public void handleConnection()throws IOException{
         while(participants.size() < parts){
-            System.out.println("Current amount of participants joined: " + participants.size() + " out of " + parts);
-            s = ss.accept();
+//                System.out.println("Current amount of participants joined: " + participants.size() + " out of " + parts);
+                s = ss.accept();
             System.out.println("New client connection attempt from port " + s.getPort());
 
             CoordinatorThread thread = new CoordinatorThread(s);
@@ -72,11 +69,45 @@ public class Coordinator{
     }
 
     public void sendDetails(){
+        System.out.println("Sending details to participants");
+        synchronized (participantThreads){
+            Iterator iterator = participantThreads.entrySet().iterator();
+            while (iterator.hasNext()) {
+                Map.Entry element = (Map.Entry)iterator.next();
+                CoordinatorThread thread = (CoordinatorThread) element.getKey();
+                String str = "DETAILS ";
+                //System.out.println("Getting the message to send to " + thread.pport);
+                for(int i : participants){
+                    if(i != thread.pport){
+                        str += i + " ";
+                    }
+                }
+                //System.out.println("Sending details: \n"+ str);
+                thread.pr.println(str);
+                thread.pr.flush();
 
+            }
+        }
     }
 
     public void sendOptions(){
+        System.out.println("Sending vote options to participants");
+        synchronized (participantThreads){
+            Iterator iterator = participantThreads.entrySet().iterator();
+            while (iterator.hasNext()) {
+                Map.Entry element = (Map.Entry)iterator.next();
+                CoordinatorThread thread = (CoordinatorThread) element.getKey();
+                String str = "VOTE_OPTIONS";
+                //System.out.println("Getting the message to send to " + thread.pport);
+                for(String s : options){
+                    str += " " + s;
+                }
+                //System.out.println("Sending details: \n"+ str);
+                thread.pr.println(str);
+                thread.pr.flush();
 
+            }
+        }
     }
 
     public void waitForOutcome(){
@@ -99,16 +130,20 @@ public class Coordinator{
 
         }
 
+//        public int getPport(){
+//            return pport;
+//        }
+
         public void run(){
             String str = null;
             try {
                 str = bf.readLine();
-                System.out.println("Str: " + str);
+                //System.out.println("Str: " + str);
             } catch (IOException e) {
                 e.printStackTrace();
             }
             if(str != null && str.contains("JOIN")){
-                System.out.println("Not null and contains JOIN");
+//                System.out.println("Not null and contains JOIN");
                 String[] splitStr = str.split(" ");
                 pport = Integer.parseInt(splitStr[1]);
                 if(participants.size() < parts) {
@@ -120,7 +155,7 @@ public class Coordinator{
                 pr.println(pport + " join accepted");
                 pr.flush();
                 System.out.println("COORD: A new participant has joined - " + pport + " / " + socket.getPort()+"\n" +
-                        "total participants: " + participants.size());
+                        "Total participants: " + participants.size() +"\n");
             }
 
         }
@@ -160,7 +195,7 @@ public class Coordinator{
         String[] defA = new String[6];
         defA[0] = "4998";
         defA[1] = "4997";
-        defA[2] = "2";
+        defA[2] = "3";
         defA[3] = "500";
         defA[4] = "A";
         defA[5] = "B";

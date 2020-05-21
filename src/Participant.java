@@ -4,6 +4,9 @@ import java.io.InputStreamReader;
 import java.io.PrintWriter;
 import java.net.ServerSocket;
 import java.net.Socket;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.Random;
 
 public class Participant {
     private Socket s;
@@ -18,6 +21,13 @@ public class Participant {
     // <lport> port that logger server is listening on
     // <pport> port that this participant will listen on
     // <timeout> timeout in milliseconds
+
+    private ArrayList<Integer> otherParticipants = new ArrayList<>();
+    private ArrayList<String> voteOptions = new ArrayList<>();
+
+    private String chosenVote = null;
+
+    private HashMap<Thread, Integer> participantConnections = new HashMap<>();
 
     public Participant(String[] args) throws IOException {
         if(args.length < 4){
@@ -60,7 +70,92 @@ public class Participant {
         }
     }
 
+    public void getDetails() throws IOException{
+        String msg;
+        msg = bf.readLine();
 
+        if(msg.contains("DETAILS")){
+            String[] msgArr = msg.split(" ");
+            for(int i = 1; i < msgArr.length; i++){
+                otherParticipants.add(Integer.parseInt(msgArr[i]));
+            }
+            System.out.println("Other participants received: " + otherParticipants);
+        }else{
+            System.out.println("Unexpected message: " + msg);
+        }
+    }
+
+    public void getOptions() throws IOException {
+        String[] msgArr = bf.readLine().split(" ");
+
+        if(msgArr[0].equals("VOTE_OPTIONS")){
+            System.out.println("Getting VOTE_OPTIONS");
+            for(int i = 1; i < msgArr.length; i++){
+                voteOptions.add(msgArr[i]);
+            }
+            System.out.println("VOTE_OPTIONS " + voteOptions);
+        }else{
+            System.out.println("Unexpected message: " + msgArr);
+        }
+    }
+
+    public void chooseVote(){
+        System.out.println("\nPicking a random vote...");
+        Random random = new Random();
+        int voteNum = random.nextInt(voteOptions.size());
+        chosenVote = voteOptions.get(voteNum);
+        System.out.println("P" + pport + ": Chosen vote is: " + chosenVote);
+    }
+
+    public void connectToOthers() throws IOException {
+        for(int i : otherParticipants) {
+            ParticipantThread thread = new ParticipantThread(i);
+            synchronized (participantConnections){
+                participantConnections.put(thread, i);
+            }
+            thread.start();
+        }
+    }
+
+
+
+//    public void castVote() throws IOException {
+//        Socket tmpSocket;
+//        PrintWriter tmpPr;
+//        InputStreamReader tmpIn;
+//        BufferedReader tmpBr;
+//        for(int i : otherParticipants){
+//            tmpSocket = new Socket("localhost", i);
+//            tmpPr = new PrintWriter(tmpSocket.getOutputStream());
+//            tmpIn = new InputStreamReader(tmpSocket.getInputStream());
+//            tmpBr = new BufferedReader(tmpIn);
+//
+//            tmpPr.println("VOTE ");
+//        }
+//
+//    }
+
+    public class ParticipantThread extends Thread{
+        Socket pSocket;
+        PrintWriter out;
+        InputStreamReader in;
+        BufferedReader inBr;
+        int otherPort;
+
+        public ParticipantThread(int p1) throws IOException {
+            otherPort = p1;
+            pSocket = new Socket("localhost", otherPort);
+            out = new PrintWriter(pSocket.getOutputStream());
+            in = new InputStreamReader(pSocket.getInputStream());
+            inBr = new BufferedReader(in);
+        }
+
+        public void run(){
+
+        }
+
+
+    }
 
 
 
@@ -74,10 +169,18 @@ public class Participant {
         Participant participant = new Participant(args);
         boolean joined = participant.join();
         if (joined){
-            System.out.println("Success");
+            System.out.println("Successfully joined");
         }else{
-            System.out.println("Fail");
+            System.out.println("Failed at join request");
+            return;
         }
+        participant.getDetails();
+        participant.getOptions();
+
+        participant.chooseVote();
+
+        participant.connectToOthers();
+        //participant.castVote();
 
 
 //        Socket s = new Socket("localhost", 4999);
