@@ -1,20 +1,15 @@
-import java.io.BufferedReader;
-import java.io.IOException;
-import java.io.InputStreamReader;
-import java.io.PrintWriter;
+import java.io.*;
 import java.net.ServerSocket;
 import java.net.Socket;
-import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.Random;
+import java.util.*;
 
-public class Participant {
-    private Socket s;
+public class Participant extends Thread {
+    private Socket socket;
     private ServerSocket ss;
     //private Socket ls;
-    private PrintWriter pr;
-    private InputStreamReader in;
-    private BufferedReader bf;
+//    private PrintWriter pr;
+//    private InputStreamReader in;
+//    private BufferedReader bf;
 
     private int cport, lport, pport, timeout;
     // <cport> port number that coordinator is listening on
@@ -28,174 +23,132 @@ public class Participant {
     private String chosenVote = null;
 
     private HashMap<Thread, Integer> participantConnections = new HashMap<>();
+    private Map<Integer, PrintWriter> map = Collections.synchronizedMap(new HashMap<Integer, PrintWriter>());
 
-    public Participant(String[] args) throws IOException {
-        if(args.length < 4){
-            System.out.println("Insufficient arguments");
-            return;
+
+    private class ClientThread extends Thread{
+        private Socket client;
+        private Integer pport;
+        private BufferedReader br;
+        private PrintWriter pr;
+
+        ClientThread(Socket client, int port) throws IOException{
+            this.client = client;
+            br = new BufferedReader(new InputStreamReader(this.client.getInputStream()));
+            pr = new PrintWriter(new OutputStreamWriter(this.client.getOutputStream()));
+            this.pport = port;
+            System.out.println("Participant initialized");
         }
 
+        public void run(){
+            pr.println("JOIN " + pport);
+            pr.flush();
+
+            try{
+                Tokenizer.Token token = null;
+                Tokenizer tokenizer = new Tokenizer();
+                String msg = br.readLine();
+                System.out.println(msg);
+                token = tokenizer.getToken(br.readLine());
+                if(!(token instanceof Tokenizer.ACKToken)){
+                    System.out.println("Expected ACKToken");
+                    client.close();
+                    return;
+                }
+                token = tokenizer.getToken(br.readLine());
+                if(token instanceof Tokenizer.DetailToken){
+                    connectParticipants(((Tokenizer.DetailToken)token).message);
+                }else{
+                    System.out.println("Expected DetailToken");
+                    client.close();
+                }
+                token = tokenizer.getToken(br.readLine());
+                if(token instanceof Tokenizer.VoteOptionToken){
+                    chooseVote(((Tokenizer.VoteOptionToken)token).options);
+                    beginVote();
+                }else{
+                    System.out.println("Expected VoteOptionToken");
+                    client.close();
+                }
+                if(token instanceof Tokenizer.VoteToken){
+                    collectVotes(((Tokenizer.VoteToken)token).message);
+                    beginVote();
+                }
+                String outFinal = getOutcome();
+                pr.println(outFinal);
+                pr.flush();
+                client.close();
+
+            }catch (IOException e){
+                System.err.println("Caught I/O Exception");
+            }
+        }
+    }
+    void connectParticipants(String participants){
+        String[] partArr = participants.split(" ");
+        System.out.println("Participants string:" + participants);
+        for(int i = 1; i < partArr.length; i++){
+            System.out.println("s:" + partArr[i]);
+            otherParticipants.add(Integer.parseInt(partArr[i]));
+        }
+
+        System.out.println("P" + pport +": receiving other participants\n" + otherParticipants);
+        System.out.println("Trying to connect participants");
+    }
+    void chooseVote(String options){
+        System.out.println("Received vote options:" + options);
+        ArrayList<String> tempArr = new ArrayList<String>(Arrays.asList(options.split(" ")));
+        tempArr.remove(0);
+        String optionArr[] = new String[tempArr.size()];
+        optionArr = tempArr.toArray(optionArr);
+        Random random = new Random();
+        int optionNum = random.nextInt(optionArr.length);
+        chosenVote = optionArr[optionNum];
+        System.out.println("Chosen vote:" + chosenVote);
+
+    }
+
+    void beginVote(){
+        System.out.println("Voting begins");
+    }
+
+    void collectVotes(String msg){
+        System.out.println("Collecting votes");
+    }
+
+    String getOutcome(){
+        String str = "";
+        for(Integer i:otherParticipants){
+            str += " " + i;
+         }
+
+        String msg = "OUTCOME " + chosenVote + str + " " + pport;
+        System.out.println(msg);
+        return msg;
+
+    }
+
+    void startConnection(String[] args) throws IOException{
         cport = Integer.parseInt(args[0]);
         lport = Integer.parseInt(args[1]);
         pport = Integer.parseInt(args[2]);
         timeout = Integer.parseInt(args[3]);
+        socket = new Socket("localhost", cport);
 
-        s = new Socket("localhost", cport);
-        pr = new PrintWriter(s.getOutputStream());
-        in = new InputStreamReader(s.getInputStream());
-        bf = new BufferedReader(in);
-        //Create a server it will listen on
-        ss = new ServerSocket(pport);
-        //ls = new Socket("localhost", lport);
-
-        System.out.println("Participant initialized: " + ss.getLocalPort());
-
+        new ClientThread(socket, pport).start();
     }
-
-    public boolean join() throws IOException {
-        System.out.println("JOIN Attempt");
-        //boolean joined = false;
-        pr.println("JOIN " + pport);
-        pr.flush();
-
-        String msg = null;
-        try{
-            msg = bf.readLine();
-        }catch (Exception e){System.out.println("Can't read a line error "+ e);}
-        if(msg != null && msg.equals(pport + " join accepted")){
-            return true;
-        }else{
-            s.close();;
-            return false;
-        }
-    }
-
-    public void getDetails() throws IOException{
-        String msg;
-        msg = bf.readLine();
-
-        if(msg.contains("DETAILS")){
-            String[] msgArr = msg.split(" ");
-            for(int i = 1; i < msgArr.length; i++){
-                otherParticipants.add(Integer.parseInt(msgArr[i]));
-            }
-            System.out.println("Other participants received: " + otherParticipants);
-        }else{
-            System.out.println("Unexpected message: " + msg);
-        }
-    }
-
-    public void getOptions() throws IOException {
-        String[] msgArr = bf.readLine().split(" ");
-
-        if(msgArr[0].equals("VOTE_OPTIONS")){
-            System.out.println("Getting VOTE_OPTIONS");
-            for(int i = 1; i < msgArr.length; i++){
-                voteOptions.add(msgArr[i]);
-            }
-            System.out.println("VOTE_OPTIONS " + voteOptions);
-        }else{
-            System.out.println("Unexpected message: " + msgArr);
-        }
-    }
-
-    public void chooseVote(){
-        System.out.println("\nPicking a random vote...");
-        Random random = new Random();
-        int voteNum = random.nextInt(voteOptions.size());
-        chosenVote = voteOptions.get(voteNum);
-        System.out.println("P" + pport + ": Chosen vote is: " + chosenVote);
-    }
-
-    public void connectToOthers() throws IOException {
-        for(int i : otherParticipants) {
-            ParticipantClientThread thread = new ParticipantClientThread(i);
-            synchronized (participantConnections){
-                participantConnections.put(thread, i);
-            }
-            thread.start();
-        }
-    }
-
-
-
-//    public void castVote() throws IOException {
-//        Socket tmpSocket;
-//        PrintWriter tmpPr;
-//        InputStreamReader tmpIn;
-//        BufferedReader tmpBr;
-//        for(int i : otherParticipants){
-//            tmpSocket = new Socket("localhost", i);
-//            tmpPr = new PrintWriter(tmpSocket.getOutputStream());
-//            tmpIn = new InputStreamReader(tmpSocket.getInputStream());
-//            tmpBr = new BufferedReader(tmpIn);
-//
-//            tmpPr.println("VOTE ");
-//        }
-//
-//    }
-
-    public class ParticipantClientThread extends Thread{
-        Socket pSocket;
-        PrintWriter out;
-        InputStreamReader in;
-        BufferedReader inBr;
-        int otherPort;
-
-        public ParticipantClientThread(int p1) throws IOException {
-            otherPort = p1;
-            pSocket = new Socket("localhost", otherPort);
-            out = new PrintWriter(pSocket.getOutputStream());
-            in = new InputStreamReader(pSocket.getInputStream());
-            inBr = new BufferedReader(in);
-
-
-        }
-
-        public void run(){
-            System.out.println("Running a new thread where a connection to " + otherPort + " is made.");
-            out.println("Test from " + pport);
-        }
-
-
-    }
-
-
 
     public static void main(String[] args) throws IOException{
-        String[] defA = new String[6];
-        defA[0] = "4998";
-        defA[1] = "4997";
-        defA[2] = "4999";
-        defA[3] = "500";
-
-        Participant participant = new Participant(args);
-        boolean joined = participant.join();
-        if (joined){
-            System.out.println("Successfully joined");
-        }else{
-            System.out.println("Failed at join request");
+        if(args.length < 4){
+            System.out.println("Usage: java Participant <cport> <lport> <pport> <timeout>");
             return;
         }
-        participant.getDetails();
-        participant.getOptions();
 
-        participant.chooseVote();
+        try {
+            new Participant().startConnection(args);
+        }catch (Exception e){System.err.println("Connection refused for one of the following reasons:" +
+                "\n1. Voting already has started\n2. No Coordinator found on specified port");}
 
-        participant.connectToOthers();
-        //participant.castVote();
-
-
-//        Socket s = new Socket("localhost", 4999);
-//        PrintWriter pr = new PrintWriter(s.getOutputStream());
-//        pr.println("Client join request");
-//        pr.flush();
-//
-//        InputStreamReader in = new InputStreamReader(s.getInputStream());
-//        BufferedReader bf = new BufferedReader(in);
-//
-//        String str = bf.readLine();
-//        System.out.println("Server: " + str);
     }
 
 

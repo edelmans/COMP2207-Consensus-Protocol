@@ -1,165 +1,327 @@
-import java.io.BufferedReader;
-import java.io.IOException;
-import java.io.InputStreamReader;
-import java.io.PrintWriter;
+import java.io.*;
+import java.lang.reflect.Array;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.util.*;
 
-public class Coordinator{
-    private ServerSocket ss;
-    private Socket s;
-    private Socket ls;
-
+public class Coordinator extends Thread{
     private int port, lport, parts, timeout;
     //<port> port coordinator is listening on
     //<lport> port that logger server is listening on
     //<parts> participants expected
     //<timeout> timeout in milliseconds
     //[<option>] set of options separated by spaces
-    private Set<String> options;
+    private Set<String> options = new HashSet<>();
     private ArrayList<Integer> participants = new ArrayList<Integer>();
+    private HashMap<ServerThread, Integer> participantThreads = new HashMap<ServerThread, Integer>();
+    private Map<Integer, PrintWriter> map = Collections.synchronizedMap(new HashMap<Integer, PrintWriter>(parts));
+    private Set<Integer> outcomeParticipants = new HashSet<>(parts);
+    private Set<String> outcomeVote = new HashSet<>();
+    private int outcomesReceived = 0;
+    public String finalVote;
+    private boolean votingInProcess;
 
-    private HashMap<Thread, Integer> participantThreads = new HashMap<>();
+    private class ServerThread extends Thread{
+        private Socket socket;
+        private int pport;
+        private BufferedReader br;
+        private PrintWriter pr;
 
-    public Coordinator(String[] args) throws IOException{
-        if(args.length < 6){
-            System.out.println("Insufficient arguments");
-            return;
-        }else{
-            options = new HashSet<String>();
-            for(int i = 4; i < args.length; i++){
-                options.add(args[i]);
-                System.out.println("Added option: " + args[i]);
-            }
+        ServerThread(Socket client) throws IOException{
+            socket = client;
+            br = new BufferedReader(new InputStreamReader(client.getInputStream()));
+            pr = new PrintWriter(new OutputStreamWriter(client.getOutputStream()));
+            pr.println("Coordinator welcomes you.");
+            pr.flush();
         }
+
+        public void run(){
+            try{
+                Tokenizer.Token token = null;
+                Tokenizer tokenizer = new Tokenizer();
+                token = tokenizer.getToken(br.readLine());
+                if(!(token instanceof Tokenizer.JoinToken)){
+                    socket.close();
+                    return;
+                }
+                votingInProcess = true;
+                String portStr = ((Tokenizer.JoinToken)token).name;
+                pport = Integer.parseInt(portStr);
+                if(!(joinCoordinator(pport, pr))){
+                    socket.close();
+                    return;
+                }
+                while(participants.size() < parts){
+                    System.out.println("Waiting for participants");
+                    Thread.sleep(1000);
+                }
+
+
+                sendDetails(participants);
+                sendOptions(participants);
+
+                token=tokenizer.getToken(br.readLine());
+                if(!(token instanceof Tokenizer.OutcomeToken)){
+                    System.out.println("Not an outcome socket");
+                    socket.close();
+                    return;
+                }else {
+                    System.out.println("Putting outcome vote from one participant");
+                    ArrayList<Integer> tmpArr = ((Tokenizer.OutcomeToken) token).parts;
+                    for (int i : tmpArr){
+                        outcomeParticipants.add(i);
+                    }
+                    outcomeVote.add(((Tokenizer.OutcomeToken) token).vote);
+                    outcomesReceived++;
+                    System.out.println("Added " + ((Tokenizer.OutcomeToken) token).vote + " " + ((Tokenizer.OutcomeToken) token).parts);
+                }
+
+                while(outcomesReceived < parts){
+                    System.out.println("Outcomes received " + outcomesReceived + "\nParticipants: " + parts);
+                    Thread.sleep(1000);
+                }
+                socket.close();
+                votingInProcess = false;
+                checkOutcome();
+                //this.interrupt();
+            }catch (IOException e){System.err.println("Caught I/O Exception.");} catch (InterruptedException e) {
+                e.printStackTrace();
+            }
+
+        }
+    }
+
+    synchronized boolean checkOutcome() throws InterruptedException {
+        while(!(outcomesReceived == parts)){
+            Thread.sleep(1000);
+        }
+        if(!(outcomeVote.size() == 1)){
+            System.out.println("Couldn't come up with a uniform vote\nOutcomeVote: " + outcomeVote);
+            return false;
+        }else if(!(outcomeParticipants.size() == parts)){
+            System.out.println("Not enough participants have submitted a vote");
+            return false;
+        }
+
+        finalVote = outcomeVote.toString();
+        System.out.println("Everyone agrees on the outcome");
+        return true;
+    }
+
+    synchronized void sendDetails(ArrayList<Integer> parts){
+        for(Map.Entry<Integer,PrintWriter> entry : map.entrySet()){
+            String msg = "DETAILS";
+            for(int p:parts){
+                if(p != entry.getKey())
+                    msg+= " " + p;
+            }
+            PrintWriter pw = entry.getValue();
+            pw.println(msg);
+            pw.flush();
+        }
+    }
+
+    synchronized void sendOptions(ArrayList<Integer> parts){
+        for(Map.Entry<Integer,PrintWriter> entry : map.entrySet()){
+            String msg = "VOTE_OPTIONS";
+            for(String s : options){
+                msg += " " + s;
+            }
+            PrintWriter pw = entry.getValue();
+            pw.println(msg);
+            pw.flush();
+        }
+    }
+
+    boolean joinCoordinator(Integer port, PrintWriter out){
+        if(participants.size() >= parts)
+            return false;
+        if(map.containsKey(port)){
+            System.out.println("Coordinator: Participant already in.");
+            return false;
+        }
+        System.out.println("ACK for " + port);
+        out.println("ACK " + port);
+        out.flush();
+        try{
+            map.put(port, out);
+        }catch (NullPointerException e){
+            return false;
+        }
+        participants.add(port);
+        return true;
+    }
+
+    void startListening(String[] args) throws IOException{
+        ServerSocket listener = new ServerSocket(Integer.parseInt(args[0]));
+        votingInProcess = true;
         port = Integer.parseInt(args[0]);
         lport = Integer.parseInt(args[1]);
         parts = Integer.parseInt(args[2]);
         timeout = Integer.parseInt(args[3]);
-
-        ss = new ServerSocket(port);
-
-        System.out.println("Coordinator initialized.\nListening on " + port);
-
-
-    }
-
-    public void handleConnection()throws IOException{
-        while(participants.size() < parts){
-//                System.out.println("Current amount of participants joined: " + participants.size() + " out of " + parts);
-            s = ss.accept();
-            System.out.println("New client connection attempt from port " + s.getPort());
-
-            CoordinatorThread thread = new CoordinatorThread(s);
-            //System.out.println("Thread created");
-            synchronized (participantThreads){
-                participantThreads.put(thread, s.getPort());
-            }
-            //System.out.println("Starting thread");
+        System.out.println("Adding options, arr length: " + args.length);
+        for(int i = 4; i < args.length; i++){
+            options.add(args[i]);
+        }
+        while (votingInProcess) {
+            Socket client = listener.accept();
+            ServerThread thread = new ServerThread(client);
             thread.start();
         }
-
-        System.out.println("All participants joined:");
-        int no = 1;
-        for(int i : participants){
-            System.out.println(no + ") " + i);
-            no++;
-        }
+        System.out.println("The world beyond the thread.start()");
     }
 
-    public void sendDetails(){
-        System.out.println("Sending details to participants");
-        synchronized (participantThreads){
-            Iterator iterator = participantThreads.entrySet().iterator();
-            while (iterator.hasNext()) {
-                Map.Entry element = (Map.Entry)iterator.next();
-                CoordinatorThread thread = (CoordinatorThread) element.getKey();
-                String str = "DETAILS ";
-                //System.out.println("Getting the message to send to " + thread.pport);
-                for(int i : participants){
-                    if(i != thread.pport){
-                        str += i + " ";
-                    }
-                }
-                //System.out.println("Sending details: \n"+ str);
-                thread.pr.println(str);
-                thread.pr.flush();
+    public static void main(String[] args) throws IOException {
 
-            }
+
+        if(args.length < 6){
+            System.out.println("Usage: java Coordinator <port> <lport> <parts> <timeout> [<options>]");
+            return;
         }
-    }
+        Coordinator coordinator = new Coordinator();
+        coordinator.startListening(args);
 
-    public void sendOptions(){
-        System.out.println("Sending vote options to participants");
-        synchronized (participantThreads){
-            Iterator iterator = participantThreads.entrySet().iterator();
-            while (iterator.hasNext()) {
-                Map.Entry element = (Map.Entry)iterator.next();
-                CoordinatorThread thread = (CoordinatorThread) element.getKey();
-                String str = "VOTE_OPTIONS";
-                //System.out.println("Getting the message to send to " + thread.pport);
-                for(String s : options){
-                    str += " " + s;
-                }
-                //System.out.println("Sending details: \n"+ str);
-                thread.pr.println(str);
-                thread.pr.flush();
 
-            }
-        }
-    }
 
-    public void waitForOutcome(){
 
-    }
-
-    public class CoordinatorThread extends Thread{
-        private PrintWriter pr;
-        private InputStreamReader in;
-        private BufferedReader bf;
-        private Socket socket;
-        private int pport;
-        //private boolean joined = false;
-
-        public CoordinatorThread(Socket s) throws IOException {
-            socket = s;
-            in = new InputStreamReader(socket.getInputStream());
-            bf = new BufferedReader(in);
-            pr = new PrintWriter(socket.getOutputStream());
-
-        }
-
-//        public int getPport(){
-//            return pport;
+//    public Coordinator(String[] args) throws IOException{
+//        if(args.length < 6){
+//            System.out.println("Insufficient arguments");
+//            return;
+//        }else{
+//            options = new HashSet<String>();
+//            for(int i = 4; i < args.length; i++){
+//                options.add(args[i]);
+//                System.out.println("Added option: " + args[i]);
+//            }
 //        }
-
-        public void run(){
-            String str = null;
-            try {
-                str = bf.readLine();
-                //System.out.println("Str: " + str);
-            } catch (IOException e) {
-                e.printStackTrace();
-            }
-            if(str != null && str.contains("JOIN")){
-//                System.out.println("Not null and contains JOIN");
-                String[] splitStr = str.split(" ");
-                pport = Integer.parseInt(splitStr[1]);
-                if(participants.size() < parts) {
-                    participants.add(pport);
-                }else{
-                    System.out.println("No more room for new participants");
-                    return;
-                }
-                pr.println(pport + " join accepted");
-                pr.flush();
-                System.out.println("COORD: A new participant has joined - " + pport + " / " + socket.getPort()+"\n" +
-                        "Total participants: " + participants.size() +"\n");
-            }
-
-        }
-    }
+//        port = Integer.parseInt(args[0]);
+//        lport = Integer.parseInt(args[1]);
+//        parts = Integer.parseInt(args[2]);
+//        timeout = Integer.parseInt(args[3]);
+//
+//        ss = new ServerSocket(port);
+//
+//        System.out.println("Coordinator initialized.\nListening on " + port);
+//
+//
+//    }
+//
+//    public void handleConnection()throws IOException{
+//        while(participants.size() < parts){
+////                System.out.println("Current amount of participants joined: " + participants.size() + " out of " + parts);
+//            s = ss.accept();
+//            System.out.println("New client connection attempt from port " + s.getPort());
+//
+//            CoordinatorThread thread = new CoordinatorThread(s);
+//            //System.out.println("Thread created");
+//            synchronized (participantThreads){
+//                participantThreads.put(thread, s.getPort());
+//            }
+//            //System.out.println("Starting thread");
+//            thread.start();
+//        }
+//
+//        System.out.println("All participants joined:");
+//        int no = 1;
+//        for(int i : participants){
+//            System.out.println(no + ") " + i);
+//            no++;
+//        }
+//    }
+//
+//    public void sendDetails(){
+//        System.out.println("Sending details to participants");
+//        synchronized (participantThreads){
+//            Iterator iterator = participantThreads.entrySet().iterator();
+//            while (iterator.hasNext()) {
+//                Map.Entry element = (Map.Entry)iterator.next();
+//                CoordinatorThread thread = (CoordinatorThread) element.getKey();
+//                String str = "DETAILS ";
+//                //System.out.println("Getting the message to send to " + thread.pport);
+//                for(int i : participants){
+//                    if(i != thread.pport){
+//                        str += i + " ";
+//                    }
+//                }
+//                //System.out.println("Sending details: \n"+ str);
+//                thread.pr.println(str);
+//                thread.pr.flush();
+//
+//            }
+//        }
+//    }
+//
+//    public void sendOptions(){
+//        System.out.println("Sending vote options to participants");
+//        synchronized (participantThreads){
+//            Iterator iterator = participantThreads.entrySet().iterator();
+//            while (iterator.hasNext()) {
+//                Map.Entry element = (Map.Entry)iterator.next();
+//                CoordinatorThread thread = (CoordinatorThread) element.getKey();
+//                String str = "VOTE_OPTIONS";
+//                //System.out.println("Getting the message to send to " + thread.pport);
+//                for(String s : options){
+//                    str += " " + s;
+//                }
+//                //System.out.println("Sending details: \n"+ str);
+//                thread.pr.println(str);
+//                thread.pr.flush();
+//
+//            }
+//        }
+//    }
+//
+//    public void waitForOutcome(){
+//
+//    }
+//
+//    public class CoordinatorThread extends Thread{
+//        private PrintWriter pr;
+//        private InputStreamReader in;
+//        private BufferedReader bf;
+//        private Socket socket;
+//        private int pport;
+//        //private boolean joined = false;
+//
+//        public CoordinatorThread(Socket s) throws IOException {
+//            socket = s;
+//            in = new InputStreamReader(socket.getInputStream());
+//            bf = new BufferedReader(in);
+//            pr = new PrintWriter(socket.getOutputStream());
+//
+//        }
+//
+////        public int getPport(){
+////            return pport;
+////        }
+//
+//        public void run(){
+//            String str = null;
+//            try {
+//                str = bf.readLine();
+//                //System.out.println("Str: " + str);
+//            } catch (IOException e) {
+//                e.printStackTrace();
+//            }
+//            if(str != null && str.contains("JOIN")){
+////                System.out.println("Not null and contains JOIN");
+//                String[] splitStr = str.split(" ");
+//                pport = Integer.parseInt(splitStr[1]);
+//                if(participants.size() < parts) {
+//                    participants.add(pport);
+//                }else{
+//                    System.out.println("No more room for new participants");
+//                    return;
+//                }
+//                pr.println(pport + " join accepted");
+//                pr.flush();
+//                System.out.println("COORD: A new participant has joined - " + pport + " / " + socket.getPort()+"\n" +
+//                        "Total participants: " + participants.size() +"\n");
+//            }
+//
+//        }
+//    }
 
 
 //    public void getParticipants() throws IOException {
@@ -190,21 +352,6 @@ public class Coordinator{
 //        }
 //
 //    }
-
-    public static void main(String[] args) throws IOException{
-        String[] defA = new String[6];
-        defA[0] = "4998";
-        defA[1] = "4997";
-        defA[2] = "3";
-        defA[3] = "500";
-        defA[4] = "A";
-        defA[5] = "B";
-
-        Coordinator coordinator = new Coordinator(defA);
-        coordinator.handleConnection();
-        coordinator.sendDetails();
-        coordinator.sendOptions();
-        coordinator.waitForOutcome();
 
 
 //        ServerSocket ss = new ServerSocket(4999);
