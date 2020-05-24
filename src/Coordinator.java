@@ -1,9 +1,4 @@
-import com.sun.javafx.collections.MappingChange;
-
-import java.io.BufferedReader;
-import java.io.IOException;
-import java.io.InputStreamReader;
-import java.io.PrintWriter;
+import java.io.*;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.util.ArrayList;
@@ -11,7 +6,7 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Set;
 
-public class Coordinator{
+public class Coordinator {
     private ServerSocket ss;
     private Socket s;
     private Socket ls;
@@ -22,131 +17,177 @@ public class Coordinator{
     //<parts> participants expected
     //<timeout> timeout in milliseconds
     //[<option>] set of options separated by spaces
-    private Set<String> options;
+    private Set<String> options = new HashSet<String>();
     private int partsJoined = 0;
+    private int partsConnected = 0;
     private ArrayList<Integer> participants = new ArrayList<Integer>();
 
-    private HashMap<Thread, Socket> joinedParticipants = new HashMap<>();
-
-    public Coordinator(String[] args) throws IOException{
-        if(args.length < 6){
-            System.out.println("Insufficient arguments");
-            return;
-        }else{
-            options = new HashSet<String>();
-            for(int i = 4; i < args.length; i++){
-                options.add(args[i]);
-                System.out.println("Added option: " + args[i]);
-            }
-        }
+    private HashMap<CoordinatorThread, Socket> joinedParticipants = new HashMap<>();
+    private HashMap<Integer, String> incomingVotes = new HashMap<>();
+    public Coordinator(String[] args) throws IOException {
         port = Integer.parseInt(args[0]);
-        lport = Integer.parseInt(args[1]);
-        parts = Integer.parseInt(args[2]);
-        timeout = Integer.parseInt(args[3]);
-
-        ss = new ServerSocket(port);
-
-        System.out.println("Coordinator initialized.\nListening on " + port);
-
+        lport =  Integer.parseInt(args[1]);
+        parts =  Integer.parseInt(args[2]);
+        timeout =  Integer.parseInt(args[2]);
+        for(int i = 4; i<args.length; i++){
+            options.add(args[i]);
+        }
+        System.out.println("Coordinator initialized\n\n");
+        System.out.println("Arguments assigned:\n Port: " + port +
+                "\nLPort: " + lport +
+                "\nParticipants expected: " + parts +
+                "\nTimeout: " + timeout +
+                "\nOptions: " + options +"\n");
 
     }
 
-    public void getParticipants() throws IOException {
-        String str = null;
-        while(partsJoined < parts){
-            System.out.println(partsJoined + " participants joined");
-            s = ss.accept();
+    void processJoin(CoordinatorThread part){
+        participants.add(part.pport);
+        partsJoined++;
 
-            System.out.println("New client connected: " + s.getPort());
-
-
-            CoordinatorThread thread = new CoordinatorThread(s);
-            synchronized (joinedParticipants){
-                joinedParticipants.put(thread, s);
-            }
-            thread.start();
-        }
-        System.out.println("All " + parts + " participants have joined:");
-        for(int i : participants){
-            System.out.println("Participant " + i);
+        if(partsJoined == parts){
+            System.out.println("C: All participants have joined, sending details and vote options");
+            sendDetails();
+            sendVoteOptions();
         }
     }
 
-    public void sendDetails() throws IOException{
-        String str;
+    void sendDetails(){
         synchronized (joinedParticipants){
-
+            for(CoordinatorThread thread : joinedParticipants.keySet()){
+                String partStr = "";
+                for(int i: participants){
+                    if(thread.pport != i)
+                        partStr+= " " + i;
+                }
+                thread.send("DETAILS", partStr);
+            }
         }
-
     }
 
-    public class CoordinatorThread extends Thread{
-        private PrintWriter pr;
-        private InputStreamReader in;
-        private BufferedReader bf;
-        private Socket socket;
+    void sendVoteOptions(){
+        String voteOpt = "";
+        for(String s:options){
+            voteOpt += " " + s;
+        }
+        synchronized (joinedParticipants){
+            for(CoordinatorThread thread : joinedParticipants.keySet()){
+                thread.send("VOTE_OPTIONS", voteOpt);
+            }
+        }
+    }
+
+    void removeParticipant(CoordinatorThread part){
+        participants.remove((Integer) part.pport);
+        partsConnected--;
+        synchronized (joinedParticipants){
+            if(joinedParticipants.keySet().contains(part)) {
+                joinedParticipants.remove(part);
+                partsJoined--;
+            }
+        }
+        if(partsJoined == 0){
+            System.out.println("C: No joined participants left");
+        }
+        if(partsConnected == 0){
+            System.out.println("C: No participants connected");
+        }
+        try{
+            part.client.close();
+            part.in.close();
+            part.out.close();
+        }catch (IOException e){
+            System.err.println("Error in removing the participant");
+        }
+    }
+
+    private class CoordinatorThread extends Thread {
+        private Socket client;
         private int pport;
-        //private boolean joined = false;
+        private BufferedReader in;
+        private PrintWriter out;
+        private boolean running = true;
 
-        public CoordinatorThread(Socket s) throws IOException {
-            socket = s;
-            in = new InputStreamReader(socket.getInputStream());
-            bf = new BufferedReader(in);
-
-            pr = new PrintWriter(socket.getOutputStream());
-
+        CoordinatorThread(Socket client) throws IOException {
+            this.client = client;
+            in = new BufferedReader(new InputStreamReader(client.getInputStream()));
+            out = new PrintWriter(new OutputStreamWriter(client.getOutputStream()), true);
         }
 
         public void run(){
-            String str = null;
-            try {
-                str = bf.readLine();
-            } catch (IOException e) {
-                e.printStackTrace();
-            }
-            if(str != null && str.contains("JOIN")){
-                String[] splitStr = str.split(" ");
-                pport = Integer.parseInt(splitStr[1]);
-                participants.add(pport);
-                partsJoined++;
-                pr.println(splitStr[1] + " join accepted");
-                pr.flush();
-                System.out.println("COORD: A new participant has joined - " + pport + " / " + socket.getPort()+"\n" +
-                        "total participants: " + partsJoined);
+            String msg;
+            String[] msgArr;
+            try{
+                while(running){
+                    msg = in.readLine();
+                    if(msg == null){
+                        System.out.println("C: Connection lost with " + pport);
+                        removeParticipant(this);
+                        return;
+                    }
+                    msgArr = msg.split(" ");
+                    if(msgArr[0].equals("JOIN")){
+                        pport = Integer.parseInt(msgArr[1]);
+                        System.out.println("C: JOIN request from " + pport);
+                        out.println("hello");
+                        processJoin(this);
+                    }else if(msgArr[0].equals("OUTCOME")){
+                        System.out.println("C: Outcome from " + pport + ": " + msgArr[1]);
+                        incomingVotes.put(pport, msgArr[1]);
+                        break;
+                    }else{
+                        System.out.println("C: Unknown message: " + msg);
+                    }
+                }
 
+            }catch (IOException e){
+                System.err.println("Caught I/O Exception");
+                removeParticipant(this);
             }
-
         }
+
+        void send(String type, String msg){
+            if(type.equals("DETAILS")){
+                System.out.println("C: Sending details -" + msg +" to " + pport);
+                out.println("DETAILS" + msg);
+            }else if(type.equals("VOTE_OPTIONS")){
+                System.out.println("C: Sending vote options -" + msg +" to " + pport);
+                out.println("VOTE_OPTIONS" + msg);
+            }
+//            switch (type){
+//                case "DETAILS":
+//                    out.println("DETAILS" + msg);
+//                case "VOTE_OPTIONS" :
+//                    out.println("VOTE_OPTIONS" + msg);
+//            }
+        }
+
     }
 
+    void startProcess() throws IOException{
+        System.out.println("C: Waiting for connections");
+        ServerSocket ss = new ServerSocket(port);
+        while(partsConnected < parts){
+            Socket client = ss.accept();
+            System.out.println("C: New client connection established");
+            CoordinatorThread thread = new CoordinatorThread(client);
+            synchronized (joinedParticipants){
+                joinedParticipants.put(thread, client);
+                partsConnected++;
+            }
+            System.out.println("C: Starting thread");
+            thread.start();
+        }
+        System.out.println("C: All participants have connected");
+    }
+
+
     public static void main(String[] args) throws IOException{
-        String[] defA = new String[6];
-        defA[0] = "4998";
-        defA[1] = "4997";
-        defA[2] = "2";
-        defA[3] = "500";
-        defA[4] = "A";
-        defA[5] = "B";
-
-        Coordinator coordinator = new Coordinator(defA);
-        coordinator.getParticipants();
-        coordinator.sendDetails();
-
-
-//        ServerSocket ss = new ServerSocket(4999);
-//        Socket s = ss.accept();
-//
-//        System.out.println("Client " + s.getPort() + " connected.");
-//
-//        InputStreamReader in = new InputStreamReader(s.getInputStream());
-//        BufferedReader bf = new BufferedReader(in);
-//
-//        String str = bf.readLine();
-//        System.out.println("Client " + s.getPort() + ": " + str);
-//
-//        PrintWriter pr = new PrintWriter(s.getOutputStream());
-//        pr.println("ACK");
-//        pr.flush();
+        if(args.length < 6){
+            System.out.println("Usage: java Coordinator <port> <lport> <parts> <timeout> [<option>]");
+            return;
+        }
+        new Coordinator(args).startProcess();
     }
 
 }

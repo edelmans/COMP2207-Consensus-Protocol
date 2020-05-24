@@ -4,6 +4,7 @@ import java.io.InputStreamReader;
 import java.io.PrintWriter;
 import java.net.ServerSocket;
 import java.net.Socket;
+import java.util.*;
 
 public class Participant {
     private Socket s;
@@ -12,26 +13,29 @@ public class Participant {
     private PrintWriter pr;
     private InputStreamReader in;
     private BufferedReader bf;
+    private boolean connected = false;
+    private boolean p2pComplete = false;
 
     private int cport, lport, pport, timeout;
     // <cport> port number that coordinator is listening on
     // <lport> port that logger server is listening on
     // <pport> port that this participant will listen on
     // <timeout> timeout in milliseconds
+    private ArrayList<Integer> otherParts = new ArrayList<>();
+    private Set<String> options = new HashSet<String>();
+    private Vote chosenVote;
+
+    private ArrayList<Thread> participantServerThreads = new ArrayList<>();
+    private ArrayList<Thread> participantClientThreads = new ArrayList<>();
 
     public Participant(String[] args) throws IOException {
-        if(args.length < 4){
-            System.out.println("Insufficient arguments");
-            return;
-        }
-
         cport = Integer.parseInt(args[0]);
         lport = Integer.parseInt(args[1]);
         pport = Integer.parseInt(args[2]);
         timeout = Integer.parseInt(args[3]);
 
         s = new Socket("localhost", cport);
-        pr = new PrintWriter(s.getOutputStream());
+        pr = new PrintWriter(s.getOutputStream(), true);
         in = new InputStreamReader(s.getInputStream());
         bf = new BufferedReader(in);
         //Create a server it will listen on
@@ -42,41 +46,119 @@ public class Participant {
 
     }
 
-    public boolean join() throws IOException {
-        System.out.println("JOIN Attempt");
-        boolean joined = false;
-        pr.println("JOIN " + pport);
-        pr.flush();
+    void connectOthers(){
+        while(connected){
+            try{
+                if(p2pComplete == false){
+                    waitForConnections();
+                }
+            }
+        }
+    }
 
-        String msg = null;
-        try{
-            msg = bf.readLine();
-        }catch (Exception e){System.out.println("Can't read a line error "+ e);}
-        if(msg != null && msg.equals(pport + " join accepted")){
-            return true;
-        }else{
-            s.close();;
-            return false;
+    void waitForConnections(){
+        for(int p : otherParts){
+
+        }
+    }
+
+    void waitforDetails(){
+        try {
+            String msg;
+            String[] msgArr;
+            while (!(otherParts.size() > 0)){
+                msgArr = bf.readLine().split(" ");
+                if(msgArr[0].equals("DETAILS")){
+                    for(int i = 1; i < msgArr.length; i++){
+                        otherParts.add(Integer.parseInt(msgArr[i]));
+                    }
+                    System.out.println("P" + pport +": Other participants received: " + otherParts);
+                }else{
+                    System.err.println("P" + pport +": Unexpected message error");
+                    System.err.println("P" + pport +": "+ msgArr);
+                    System.exit(1);
+                }
+
+
+            }
+        }catch (IOException e){
+            System.err.println("IOException at waitForDetails: " + e);
+        }
+    }
+
+    void waitforOptions(){
+        try {
+            String msg;
+            String[] msgArr;
+            while (!(options.size() > 0)){
+                msgArr = bf.readLine().split(" ");
+                if(msgArr[0].equals("VOTE_OPTIONS")){
+                    for(int i = 1; i < msgArr.length; i++){
+                        options.add(msgArr[i]);
+                    }
+                    System.out.println("P" + pport +": Options received: " + options);
+                }else{
+                    System.err.println("P" + pport +": Unexpected message error");
+                    System.err.println("P" + pport +": "+ msgArr);
+                    System.exit(1);
+                }
+
+            }
+        }catch (IOException e){
+            System.err.println("IOException at waitForDetails: " + e);
+        }
+    }
+
+    void chooseVote(){
+        Random rand = new Random();
+        String[] array = options.toArray(new String[options.size()]);
+
+
+        int i = rand.nextInt(array.length);
+        chosenVote = new Vote(pport, array[i]);
+        System.out.println("P" + pport +": Chosen vote: " + chosenVote.getVote());
+    }
+
+    private class ParticipantClientThread extends Thread{
+        private Socket client;
+        private int serverPport;
+        private BufferedReader in;
+        private PrintWriter out;
+        private boolean running = true;
+
+        ParticipantClientThread(Socket client) throws IOException {
+
+
+        }
+
+        public void run(){
+
         }
     }
 
 
 
-
-
     public static void main(String[] args) throws IOException{
-//        String[] defA = new String[6];
-//        defA[0] = "4998";
-//        defA[1] = "4997";
-//        defA[2] = "4999";
-//        defA[3] = "500";
+        if(args.length < 4){
+            System.out.println("Usage: java Participant <cport> <lport> <pport> <timeout>");
+            return;
+        }
 
         Participant participant = new Participant(args);
-        if(participant.join()){
-            System.out.println("P"+participant.pport+": Successfully joined");
-        }else{
-            participant.s.close();
+        participant.pr.println("JOIN " + participant.pport);
+        System.out.println("P: Requesting JOIN with " + participant.cport);
+        String in = participant.bf.readLine();
+        if(in.equals("hello")){
+            participant.connected =true;
+            System.out.println("P: Joined coordinator on port " + participant.cport);
         }
+        participant.waitforDetails();
+        participant.waitforOptions();
+        participant.chooseVote();
+
+        participant.connectOthers();
+        System.err.println("Ready to vote");
+
 
 
 //        Socket s = new Socket("localhost", 4999);
