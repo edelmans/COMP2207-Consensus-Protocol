@@ -1,4 +1,5 @@
 import java.io.*;
+import java.lang.reflect.Array;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.nio.Buffer;
@@ -16,6 +17,7 @@ public class Participant {
     private String outcomeVote = "";
     private Vote chosenVote;
     private int votesReceived = 0;
+    private String finalOutcome;
 
     private int cport, lport, pport, timeout;
     // <cport> port number that coordinator is listening on
@@ -84,9 +86,57 @@ public class Participant {
             i++;
         }
         //Array of votes for now
+        HashMap<String, Integer> numOfVoters = new HashMap<>();
+        for(String s : options){
+            int num = 0;
+            for(Vote v : votes){
+                if(s.equals(v.getVote())){
+                    num++;
+                }
+            }
+            numOfVoters.put(s, num);
+        }
 
+        ArrayList<String> tieOptions = new ArrayList<>();
+        String highestVoteOption = null;
+        int highestVoteNo = 0;
+        for(HashMap.Entry<String, Integer> entry : numOfVoters.entrySet()){
+            if(entry.getValue() > highestVoteNo){
+                highestVoteNo = entry.getValue();
+                highestVoteOption = entry.getKey();
+                tieOptions = new ArrayList<>();
+            }else if(entry.getValue() == highestVoteNo){
+                tieOptions.add(highestVoteOption);
+                tieOptions.add(entry.getKey());
+            }
+        }
+        if(highestVoteOption != null){
+            otherParts.add(pport);
+            Collections.sort(otherParts);
+            String parts = "";
+            for(Integer p : otherParts){
+                parts += " " + p;
+            }
 
+            if(tieOptions.size() > 0){
+                System.out.println("RunnerUpOptions is " + tieOptions.size() +" : " + tieOptions);
+                String strOpt = tieOptions.toString().replaceAll(",", "");
+                System.out.println(strOpt + ": strOpt");
+                char tempArr[] = strOpt.substring(1,strOpt.length()-1).replaceAll(" ", "").toCharArray();
+                System.out.println("Runner ups converted to charr array for sorting: " + tempArr);
+                Arrays.sort(tempArr);
+                highestVoteOption = Character.toString(tempArr[0]);
 
+            }
+
+            finalOutcome = "OUTCOME " + highestVoteOption + parts;
+            pr.println(finalOutcome);
+            System.out.println("P" + pport +": sent outcome: " + finalOutcome);
+        }
+        try{
+            Thread.sleep(10000);
+        }catch (InterruptedException e){System.out.println("Cannot sleep error " + e);}
+        System.exit(0);
 
     }
 
@@ -142,7 +192,7 @@ public class Participant {
                     msgArr = msg.split(" ");
                     if(msgArr[0].equals("VOTE")){
                         clientPort = Integer.parseInt(msgArr[1]);
-                        System.out.println("P" + pport + ": VOTE from " + clientPort);
+                        System.out.println("P" + pport + ": VOTE from " + clientPort + " " + msgArr[2]);
                         System.out.println("P" + pport + ": Registering vote");
 
                         synchronized (outcomeVote) {

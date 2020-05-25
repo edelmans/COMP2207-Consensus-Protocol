@@ -21,14 +21,16 @@ public class Coordinator {
     private int partsJoined = 0;
     private int partsConnected = 0;
     private ArrayList<Integer> participants = new ArrayList<Integer>();
+    private boolean outcomesReceived = false;
+    private int endVoting = 0;
 
     private HashMap<CoordinatorThread, Socket> joinedParticipants = new HashMap<>();
-    private HashMap<Integer, String> incomingVotes = new HashMap<>();
+    private HashMap<String, Integer[]> incomingOutcomes = new HashMap<>();
     public Coordinator(String[] args) throws IOException {
         port = Integer.parseInt(args[0]);
         lport =  Integer.parseInt(args[1]);
         parts =  Integer.parseInt(args[2]);
-        timeout =  Integer.parseInt(args[2]);
+        timeout =  Integer.parseInt(args[3]);
         for(int i = 4; i<args.length; i++){
             options.add(args[i]);
         }
@@ -83,9 +85,9 @@ public class Coordinator {
         synchronized (joinedParticipants){
             if(joinedParticipants.keySet().contains(part)) {
                 joinedParticipants.remove(part);
-                partsJoined--;
             }
         }
+        partsJoined--;
         if(partsJoined == 0){
             System.out.println("C: No joined participants left");
         }
@@ -99,6 +101,28 @@ public class Coordinator {
         }catch (IOException e){
             System.err.println("Error in removing the participant");
         }
+    }
+
+    void checkOutcomes(){
+        HashMap.Entry<String, Integer[]> expected = null;
+        String finalVote = null;
+        int i = 1;
+        System.out.println("Going to check the outcomes");
+        for(HashMap.Entry<String, Integer[]> entry : incomingOutcomes.entrySet()){
+            if(i == 1){
+                expected = entry;
+                finalVote = entry.getKey();
+                i++;
+            }else{
+                if(!entry.equals(expected)){
+                    System.out.println("C: The participants did not come to a consensus");
+                    System.out.println(expected + " however other participant decided " + entry);
+                    System.exit(0);
+                }
+            }
+        }
+        System.out.println("The participants came to a consensus and decided: " + finalVote);
+
     }
 
     private class CoordinatorThread extends Thread {
@@ -133,11 +157,24 @@ public class Coordinator {
                         processJoin(this);
                     }else if(msgArr[0].equals("OUTCOME")){
                         System.out.println("C: Outcome from " + pport + ": " + msgArr[1]);
-                        incomingVotes.put(pport, msgArr[1]);
+                        Integer[] voters = new Integer[msgArr.length-2];
+                        for(int i = 2; i < msgArr.length; i++){
+                            voters[i-2] = Integer.parseInt(msgArr[i]);
+                        }
+                        incomingOutcomes.put(msgArr[1], voters);
+                        //System.out.println("C: Outcome received = true;");
+                        outcomesReceived = true;
                         break;
                     }else{
                         System.out.println("C: Unknown message: " + msg);
                     }
+                }
+                //System.out.println("Outside while loop in run()");
+                if(outcomesReceived) {
+                    removeParticipant(this);
+                    endVoting++;
+//                    System.out.println("C: Outcome received");
+//                    checkOutcomes();
                 }
 
             }catch (IOException e){
@@ -175,6 +212,7 @@ public class Coordinator {
                 joinedParticipants.put(thread, client);
                 partsConnected++;
             }
+
             System.out.println("C: Starting thread");
             thread.start();
         }
@@ -187,7 +225,18 @@ public class Coordinator {
             System.out.println("Usage: java Coordinator <port> <lport> <parts> <timeout> [<option>]");
             return;
         }
-        new Coordinator(args).startProcess();
+
+        Coordinator coordinator = new Coordinator(args);
+        coordinator.startProcess();
+        while(coordinator.endVoting < coordinator.parts){
+           //System.out.println(coordinator.endVoting);
+            try {
+                Thread.sleep(1000);
+            }catch (InterruptedException e){e.printStackTrace();}
+        }
+        coordinator.checkOutcomes();
+
+
     }
 
 }
